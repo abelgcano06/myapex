@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   }
 
   // Save credentials to session.json
-  const sessionDir = path.join("c:/garmin-ai", "data");
+  const sessionDir = path.join(process.env.GARMIN_DIR ?? "c:/garmin-ai", "data");
   const sessionPath = path.join(sessionDir, "session.json");
 
   try {

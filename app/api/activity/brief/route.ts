@@ -14,7 +14,7 @@ import fs from "fs";
 
 const execFileAsync = promisify(execFile);
 
-const GARMIN_DIR = "c:/garmin-ai";
+const GARMIN_DIR = process.env.GARMIN_DIR ?? "c:/garmin-ai";
 const PYTHON     = process.env.PYTHON_BIN ?? "c:/garmin-ai/.venv/Scripts/python.exe";
 const SCRIPT     = path.join(GARMIN_DIR, "generate_activity_brief.py");
 const DATA_DIR   = path.join(GARMIN_DIR, "data", "users");

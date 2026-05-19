@@ -3,10 +3,11 @@ import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 
-const DATA_DIR = "c:/garmin-ai/data";
+const GARMIN_DIR = process.env.GARMIN_DIR ?? "c:/garmin-ai";
+const DATA_DIR = process.env.GARMIN_DATA_DIR ?? path.join(GARMIN_DIR, "data");
 const STATUS_FILE = path.join(DATA_DIR, "sync_status.json");
 const LOG_FILE = path.join(DATA_DIR, "sync_log.txt");
-const SYNC_SCRIPT = "c:/garmin-ai/run_sync.py";
+const SYNC_SCRIPT = path.join(GARMIN_DIR, "run_sync.py");
 
 interface SyncStatus {
   status: "idle" | "starting" | "running" | "done" | "error";
@@ -79,10 +80,8 @@ export async function POST(request: Request) {
 
   const PYTHON = process.env.PYTHON_BIN ?? "c:/garmin-ai/.venv/Scripts/python.exe";
 
-  // On Windows, passing file descriptors to shell:true + detached processes fails.
-  // Spawn Python directly (no shell) and let it write its own log via --log-file.
   const proc = spawn(PYTHON, [SYNC_SCRIPT, "--log-file", LOG_FILE, "--sections", sections], {
-    cwd: "c:/garmin-ai",
+    cwd: GARMIN_DIR,
     detached: true,
     shell: false,
     stdio: "ignore",
