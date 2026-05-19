@@ -81,7 +81,7 @@ export function SyncButton() {
         return;
       }
 
-      const sec = (s as Record<string, unknown>).sections as Record<string, Record<string, string>> | undefined;
+      const sec = (s as unknown as Record<string, unknown>).sections as Record<string, Record<string, string>> | undefined;
       const needed: string[] = [];
 
       needed.push("day", "master");
