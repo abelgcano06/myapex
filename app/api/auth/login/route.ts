@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -32,7 +33,29 @@ function makeUserId(email: string): string {
   return email.replace(/@/g, "_at_").replace(/\./g, "_").replace(/[^a-zA-Z0-9_]/g, "");
 }
 
-export async function POST(request: Request) {
+function makeGarminKey(garminEmail: string): string {
+  return garminEmail.replace(/@/g, "_at_").replace(/\./g, "_").replace(/[^a-zA-Z0-9_]/g, "");
+}
+
+function setCookies(response: NextResponse, garminEmail: string) {
+  const garminKey = makeGarminKey(garminEmail);
+  const opts = { httpOnly: true, sameSite: "lax" as const, path: "/", maxAge: 60 * 60 * 24 * 30 };
+  response.cookies.set("apex_garmin_key", garminKey, opts);
+  response.cookies.set("apex_garmin_email", garminEmail, opts);
+}
+
+function writeUserSession(garminEmail: string, garminPassword: string) {
+  const garminKey = makeGarminKey(garminEmail);
+  const sessionsDir = path.join(GARMIN_DIR, "data", "sessions");
+  if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionsDir, `${garminKey}.json`),
+    JSON.stringify({ email: garminEmail, password: garminPassword }, null, 2),
+    "utf-8"
+  );
+}
+
+export async function POST(request: NextRequest) {
   const body = await request.json() as { email?: string; password?: string };
   const { email, password } = body;
 
@@ -45,46 +68,36 @@ export async function POST(request: Request) {
   const account = store.users.find(u => u.email === normalizedEmail);
 
   if (account) {
-    // New account system — validate password hash
     const hash = hashPassword(password, account.password_salt);
     if (hash !== account.password_hash) {
       return NextResponse.json({ ok: false, error: "Email o contraseña incorrectos." }, { status: 401 });
     }
 
-    // Restore Garmin session.json so sync works
-    if (account.garmin_email && account.garmin_password) {
-      const sessionDir = path.join(GARMIN_DIR, "data");
-      if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(sessionDir, "session.json"),
-        JSON.stringify({ email: account.garmin_email, password: account.garmin_password }, null, 2),
-        "utf-8"
-      );
-    }
-
-    return NextResponse.json({
+    const response = NextResponse.json({
       ok: true,
       user_id: account.user_id,
       email: account.email,
       name: account.name,
       onboarding_completed: account.onboarding_completed,
     });
+
+    if (account.garmin_email && account.garmin_password) {
+      writeUserSession(account.garmin_email, account.garmin_password);
+      setCookies(response, account.garmin_email);
+    }
+
+    return response;
   }
 
-  // Legacy fallback: treat email/password as Garmin credentials (for existing users)
-  const sessionDir = path.join(GARMIN_DIR, "data");
-  if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(sessionDir, "session.json"),
-    JSON.stringify({ email: normalizedEmail, password }, null, 2),
-    "utf-8"
-  );
-
-  return NextResponse.json({
+  // Legacy fallback: treat email/password as Garmin credentials
+  writeUserSession(normalizedEmail, password);
+  const response = NextResponse.json({
     ok: true,
     user_id: makeUserId(normalizedEmail),
     email: normalizedEmail,
     name: "",
     onboarding_completed: true,
   });
+  setCookies(response, normalizedEmail);
+  return response;
 }

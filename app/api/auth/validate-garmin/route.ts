@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
@@ -55,7 +56,22 @@ function validateWithPython(garminEmail: string, garminPassword: string): Promis
   });
 }
 
-export async function POST(request: Request) {
+function makeGarminKey(garminEmail: string): string {
+  return garminEmail.replace(/@/g, "_at_").replace(/\./g, "_").replace(/[^a-zA-Z0-9_]/g, "");
+}
+
+function writeUserSession(garminEmail: string, garminPassword: string) {
+  const garminKey = makeGarminKey(garminEmail);
+  const sessionsDir = path.join(GARMIN_DIR, "data", "sessions");
+  if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionsDir, `${garminKey}.json`),
+    JSON.stringify({ email: garminEmail, password: garminPassword }, null, 2),
+    "utf-8"
+  );
+}
+
+export async function POST(request: NextRequest) {
   const body = await request.json() as { garmin_email?: string; garmin_password?: string; apex_email?: string };
   const { garmin_email, garmin_password, apex_email } = body;
 
@@ -63,18 +79,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Ingresa tu email y contraseña de Garmin." }, { status: 400 });
   }
 
-  // Save Garmin credentials to session.json immediately (the sync script uses this)
-  const dataDir = path.join(GARMIN_DIR, "data");
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  const normalizedGarminEmail = garmin_email.trim().toLowerCase();
 
-  const sessionPath = path.join(dataDir, "session.json");
-  fs.writeFileSync(sessionPath, JSON.stringify({
-    email: garmin_email.trim(),
-    password: garmin_password,
-  }, null, 2), "utf-8");
+  // Write per-user session file (used by sync script)
+  writeUserSession(normalizedGarminEmail, garmin_password);
 
-  // Validate with Python if script exists, otherwise trust the credentials
-  const valid = await validateWithPython(garmin_email.trim(), garmin_password);
+  // Validate with Python if script exists
+  const valid = await validateWithPython(normalizedGarminEmail, garmin_password);
   if (!valid) {
     return NextResponse.json({ ok: false, error: "No se pudo conectar con Garmin. Verifica tu email y contraseña." }, { status: 401 });
   }
@@ -84,11 +95,16 @@ export async function POST(request: Request) {
     const store = readAccounts();
     const user = store.users.find(u => u.email === apex_email);
     if (user) {
-      user.garmin_email = garmin_email.trim();
+      user.garmin_email = normalizedGarminEmail;
       user.garmin_password = garmin_password;
       writeAccounts(store);
     }
   }
 
-  return NextResponse.json({ ok: true });
+  const garminKey = makeGarminKey(normalizedGarminEmail);
+  const cookieOpts = { httpOnly: true, sameSite: "lax" as const, path: "/", maxAge: 60 * 60 * 24 * 30 };
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set("apex_garmin_key", garminKey, cookieOpts);
+  response.cookies.set("apex_garmin_email", normalizedGarminEmail, cookieOpts);
+  return response;
 }

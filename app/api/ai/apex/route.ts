@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   readActivityIndex,
@@ -6,6 +7,7 @@ import {
   readDataJson,
   readPIJson,
   resolveBriefFile,
+  getUserDataDir,
 } from "@/lib/data";
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -63,11 +65,11 @@ const CHAT_ANALYSIS_KEYWORDS = [
 
 // ── athlete metrics (CTL/ATL/TSB + HRV + sleep) ───────────────────────────────
 
-function computeAthleteMetrics() {
-  const idx = readActivityIndex();
-  const profile  = readDataJson<Record<string,unknown>>("profile.json");
-  const baseline = readPIJson<Record<string,unknown>>("athlete_baseline.json");
-  const ftpProf  = readPIJson<Record<string,unknown>>("ftp_profile.json");
+function computeAthleteMetrics(userDir?: string) {
+  const idx = readActivityIndex(userDir);
+  const profile  = readDataJson<Record<string,unknown>>("profile.json", userDir);
+  const baseline = readPIJson<Record<string,unknown>>("athlete_baseline.json", userDir);
+  const ftpProf  = readPIJson<Record<string,unknown>>("ftp_profile.json", userDir);
 
   const maxHr = Number((profile as {max_hr?: number} | null)?.max_hr ?? 185);
   const lthr  = maxHr * 0.88;
@@ -152,7 +154,7 @@ function computeAthleteMetrics() {
   for (let i = 0; i < 5; i++) {
     const d = new Date(today); d.setDate(d.getDate() - i);
     const dateStr = d.toISOString().slice(0, 10);
-    const sleepAna = readDataJson<Record<string,unknown>>(`sleep/${dateStr}/sleep_analysis.json`);
+    const sleepAna = readDataJson<Record<string,unknown>>(`sleep/${dateStr}/sleep_analysis.json`, userDir);
     if (sleepAna) {
       const auto = sleepAna.autonomic_recovery as Record<string,unknown> ?? {};
       const rec  = sleepAna.recovery_summary   as Record<string,unknown> ?? {};
@@ -244,12 +246,12 @@ function computeAthleteMetrics() {
 
 // ── athlete context ────────────────────────────────────────────────────────────
 
-function buildAthleteContext() {
-  const baseline = readPIJson<Record<string,unknown>>("athlete_baseline.json");
-  const profile  = readPIJson<Record<string,unknown>>("profile.json")
-                ?? readPIJson<Record<string,unknown>>("../profile.json");
-  const ftpProf  = readPIJson<Record<string,unknown>>("ftp_profile.json");
-  const idx = readActivityIndex();
+function buildAthleteContext(userDir?: string) {
+  const baseline = readPIJson<Record<string,unknown>>("athlete_baseline.json", userDir);
+  const profile  = readPIJson<Record<string,unknown>>("profile.json", userDir)
+                ?? readPIJson<Record<string,unknown>>("../profile.json", userDir);
+  const ftpProf  = readPIJson<Record<string,unknown>>("ftp_profile.json", userDir);
+  const idx = readActivityIndex(userDir);
   const recent = idx.slice(-5).reverse();
 
   const recentLines = recent.map(a =>
@@ -338,8 +340,8 @@ function ctxBlock(ctx: ReturnType<typeof buildAthleteContext>): string {
 
 // ── data loaders ───────────────────────────────────────────────────────────────
 
-function loadActivityData(activityId: string) {
-  const idx = readActivityIndex();
+function loadActivityData(activityId: string, userDir?: string) {
+  const idx = readActivityIndex(userDir);
   const entry = idx.find(a => String(a.activity_id) === String(activityId));
   if (!entry) return null;
 
@@ -355,8 +357,8 @@ function loadActivityData(activityId: string) {
   return { analysis, findings, seriesInsights, entry };
 }
 
-function loadRecentAnalyses(currentId?: string, n = 6) {
-  const idx = readActivityIndex();
+function loadRecentAnalyses(currentId?: string, n = 6, userDir?: string) {
+  const idx = readActivityIndex(userDir);
   const prev = idx.filter(a => String(a.activity_id) !== String(currentId ?? "")).slice(-n);
   return prev.reverse().map(a => {
     const p = resolveBriefFile(a.analysis_file as string);
@@ -676,7 +678,7 @@ Si no tienes el dato: "No tengo ese dato en tu historial aún."`;
 
 // ── handler ────────────────────────────────────────────────────────────────────
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const body = await request.json() as ApexRequest;
   const { call_type, activity_id, message, athlete_data, session_data, state_data } = body;
 
@@ -684,9 +686,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "call_type is required" }, { status: 400 });
   }
 
+  const garminKey = request.cookies.get("apex_garmin_key")?.value ?? "";
+  const userDir = garminKey ? getUserDataDir(garminKey) : undefined;
+
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const ctx = buildAthleteContext();
-  const actData = activity_id ? loadActivityData(activity_id) : null;
+  const ctx = buildAthleteContext(userDir);
+  const actData = activity_id ? loadActivityData(activity_id, userDir) : null;
 
   try {
     if (call_type === "verdict") {
@@ -701,7 +706,7 @@ export async function POST(request: Request) {
 
     if (call_type === "athlete_profile") {
       if (!actData?.analysis) return NextResponse.json({ error: "activity not found" }, { status: 404 });
-      const recent = loadRecentAnalyses(activity_id, 5);
+      const recent = loadRecentAnalyses(activity_id, 5, userDir);
       const resp = await client.messages.create({
         model: MODELS.sonnet,
         max_tokens: 600,
@@ -726,7 +731,7 @@ export async function POST(request: Request) {
 
     if (call_type === "full_report") {
       if (!actData) return NextResponse.json({ error: "activity not found" }, { status: 404 });
-      const recent = loadRecentAnalyses(activity_id, 6);
+      const recent = loadRecentAnalyses(activity_id, 6, userDir);
       const resp = await client.messages.create({
         model: MODELS.opus,
         max_tokens: 3000,
@@ -736,7 +741,7 @@ export async function POST(request: Request) {
     }
 
     if (call_type === "athlete_context") {
-      return NextResponse.json({ call_type, output: computeAthleteMetrics() });
+      return NextResponse.json({ call_type, output: computeAthleteMetrics(userDir) });
     }
 
     if (call_type === "weekly_plan") {

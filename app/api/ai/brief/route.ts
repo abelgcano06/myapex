@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   readDataJson,
@@ -8,6 +9,7 @@ import {
   resolveBriefFile,
   writeDataJson,
   getToday,
+  getUserDataDir,
 } from "@/lib/data";
 
 interface BriefRequest {
@@ -73,17 +75,20 @@ async function callClaudeDeep(
   return raw;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const body: BriefRequest = await request.json();
   const { section, date, id, type } = body;
 
   const targetDate = date || getToday();
+  const garminKey = request.cookies.get("apex_garmin_key")?.value ?? "";
+  const userDir = garminKey ? getUserDataDir(garminKey) : undefined;
 
   // ── QUICK ──────────────────────────────────────────────────────────────────
   if (type === "quick") {
     if (section === "sleep") {
       const briefAi = readDataJson<Record<string, unknown>>(
-        `sleep/${targetDate}/sleep_brief_ai.json`
+        `sleep/${targetDate}/sleep_brief_ai.json`,
+        userDir
       );
       if (briefAi) return NextResponse.json(briefAi);
       return NextResponse.json({
@@ -94,7 +99,8 @@ export async function POST(request: Request) {
 
     if (section === "day") {
       const briefAi = readDataJson<Record<string, unknown>>(
-        `day/${targetDate}/day_brief_ai.json`
+        `day/${targetDate}/day_brief_ai.json`,
+        userDir
       );
       if (briefAi) return NextResponse.json(briefAi);
       return NextResponse.json({
@@ -106,7 +112,7 @@ export async function POST(request: Request) {
     if (section === "activity") {
       if (!id)
         return NextResponse.json({ error: "id required" }, { status: 400 });
-      const activityIndex = readActivityIndex();
+      const activityIndex = readActivityIndex(userDir);
       const activity = activityIndex.find(
         (a) => String(a.activity_id) === String(id)
       );
@@ -118,7 +124,7 @@ export async function POST(request: Request) {
     }
 
     if (section === "master") {
-      const master = readPIJson<Record<string, unknown>>("master_brief.json");
+      const master = readPIJson<Record<string, unknown>>("master_brief.json", userDir);
       if (master) return NextResponse.json(master);
       return NextResponse.json({ pending: true });
     }
@@ -128,14 +134,13 @@ export async function POST(request: Request) {
 
   // ── DEEP ───────────────────────────────────────────────────────────────────
   if (type === "deep") {
-    // Return cached deep result if it already exists
     const deepCachePath =
       section === "sleep" ? `sleep/${targetDate}/sleep_deep_ai.json`
       : section === "day" ? `day/${targetDate}/day_deep_ai.json`
       : null;
 
     if (deepCachePath) {
-      const cached = readDataJson<Record<string, unknown>>(deepCachePath);
+      const cached = readDataJson<Record<string, unknown>>(deepCachePath, userDir);
       if (cached) return NextResponse.json({ content: cached, cached: true });
     }
 
@@ -143,46 +148,26 @@ export async function POST(request: Request) {
       let dataForAnalysis: Record<string, unknown> = {};
 
       if (section === "sleep") {
-        const analysis = readDataJson<Record<string, unknown>>(
-          `sleep/${targetDate}/sleep_analysis.json`
-        );
-        const findings = readDataJson<Record<string, unknown>>(
-          `sleep/${targetDate}/sleep_findings.json`
-        );
-        const brief = readDataJson<Record<string, unknown>>(
-          `sleep/${targetDate}/sleep_brief.json`
-        );
-        dataForAnalysis = {
-          analysis: analysis ?? {},
-          findings: findings ?? {},
-          brief: brief ?? {},
-        };
+        const analysis = readDataJson<Record<string, unknown>>(`sleep/${targetDate}/sleep_analysis.json`, userDir);
+        const findings = readDataJson<Record<string, unknown>>(`sleep/${targetDate}/sleep_findings.json`, userDir);
+        const brief    = readDataJson<Record<string, unknown>>(`sleep/${targetDate}/sleep_brief.json`, userDir);
+        dataForAnalysis = { analysis: analysis ?? {}, findings: findings ?? {}, brief: brief ?? {} };
       } else if (section === "day") {
-        const analysis = readDataJson<Record<string, unknown>>(
-          `day/${targetDate}/day_analysis.json`
-        );
-        const findings = readDataJson<Record<string, unknown>>(
-          `day/${targetDate}/day_findings.json`
-        );
-        dataForAnalysis = {
-          analysis: analysis ?? {},
-          findings: findings ?? {},
-        };
+        const analysis = readDataJson<Record<string, unknown>>(`day/${targetDate}/day_analysis.json`, userDir);
+        const findings = readDataJson<Record<string, unknown>>(`day/${targetDate}/day_findings.json`, userDir);
+        dataForAnalysis = { analysis: analysis ?? {}, findings: findings ?? {} };
       } else if (section === "activity") {
         if (!id)
           return NextResponse.json({ error: "id required" }, { status: 400 });
-        const activityIndex = readActivityIndex();
-        const activity = activityIndex.find(
-          (a) => String(a.activity_id) === String(id)
-        );
+        const activityIndex = readActivityIndex(userDir);
+        const activity = activityIndex.find((a) => String(a.activity_id) === String(id));
         dataForAnalysis = { activity: activity ?? {} };
       } else if (section === "master") {
-        const master = readPIJson<Record<string, unknown>>("master_brief.json");
+        const master = readPIJson<Record<string, unknown>>("master_brief.json", userDir);
         dataForAnalysis = { master: master ?? {} };
       }
 
-      // Load athlete baseline context for personalized recommendations
-      const baseline = readPIJson<{ athlete_context_string?: string; physiological_baselines?: unknown; health_flags?: unknown }>("athlete_baseline.json");
+      const baseline = readPIJson<{ athlete_context_string?: string; physiological_baselines?: unknown; health_flags?: unknown }>("athlete_baseline.json", userDir);
       const athleteContext = baseline?.athlete_context_string ?? "";
 
       const rawJson = await callClaudeDeep(section, dataForAnalysis, athleteContext);
@@ -192,17 +177,13 @@ export async function POST(request: Request) {
       } catch {
         parsed = { raw: rawJson };
       }
-      // Save to disk so we never call Claude again for the same day
       if (deepCachePath) {
-        try { writeDataJson(deepCachePath, parsed); } catch { /* non-fatal */ }
+        try { writeDataJson(deepCachePath, parsed, userDir); } catch { /* non-fatal */ }
       }
       return NextResponse.json({ content: parsed });
     } catch (err) {
       console.error("Claude deep analysis error:", err);
-      return NextResponse.json(
-        { error: "Error al generar análisis profundo." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Error al generar análisis profundo." }, { status: 500 });
     }
   }
 

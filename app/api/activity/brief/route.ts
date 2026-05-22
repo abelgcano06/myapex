@@ -7,6 +7,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
@@ -18,24 +19,12 @@ const GARMIN_DIR = process.env.GARMIN_DIR ?? "c:/garmin-ai";
 const PYTHON     = process.env.PYTHON_BIN ?? "c:/garmin-ai/.venv/Scripts/python.exe";
 const SCRIPT     = path.join(GARMIN_DIR, "generate_activity_brief.py");
 const DATA_DIR   = path.join(GARMIN_DIR, "data", "users");
-const SESSION    = path.join(GARMIN_DIR, "data", "session.json");
-
-function getUserId(): string | null {
-  if (!fs.existsSync(SESSION)) return null;
-  try {
-    const s = JSON.parse(fs.readFileSync(SESSION, "utf-8"));
-    const email: string = (s.email ?? "").trim().toLowerCase();
-    return email.replace("@", "_at_").replace(/\./g, "_");
-  } catch {
-    return null;
-  }
-}
 
 function getBriefPath(userId: string, activityId: string): string {
   return path.join(DATA_DIR, userId, "activities", activityId, "activity_brief.json");
 }
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
 
@@ -43,7 +32,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  const userId = getUserId();
+  const userId = request.cookies.get("apex_garmin_key")?.value ?? "";
   if (!userId) {
     return NextResponse.json({ error: "No active session" }, { status: 401 });
   }
