@@ -259,7 +259,12 @@ function buildAthleteContext() {
   const ftp = (ftpProf as {ftp_current?: number} | null)?.ftp_current
            ?? ((baseline?.ftp_model as {ftp_estimated?: number} | undefined)?.ftp_estimated);
   const profileTyped = profile as {
-    weight_kg?: number; max_hr?: number; goal_event?: string; goal_date?: string;
+    weight_kg?: number; height_cm?: number; age?: number; sex?: string;
+    max_hr?: number; goal_event?: string; goal_date?: string; goal_target?: string;
+    sport_focus?: string[]; experience_years?: number; weekly_hours_available?: number;
+    competition_level?: string; has_coach?: boolean;
+    work_type?: string; sleep_goal_hours?: number; injuries?: string[];
+    name?: string;
   } | null;
 
   // primary_type from most recent activity's athlete_profile
@@ -280,12 +285,28 @@ function buildAthleteContext() {
   const recurrentLimiters = Object.entries(limiterCounts)
     .filter(([,v]) => v >= 2).sort((a,b) => b[1]-a[1]).map(([k]) => k);
 
+  // Injuries string for prompt
+  const injuriesStr = profileTyped?.injuries?.length
+    ? `Lesiones recurrentes: ${profileTyped.injuries.join(", ")}`
+    : undefined;
+
   return {
     ftp_w: ftp,
     weight_kg: profileTyped?.weight_kg,
+    height_cm: profileTyped?.height_cm,
+    age: profileTyped?.age,
+    sex: profileTyped?.sex,
     max_hr: profileTyped?.max_hr ?? (baseline?.physiological_baselines as {max_hr?: number} | undefined)?.max_hr,
     primary_type: primaryType,
-    goal: [profileTyped?.goal_event, profileTyped?.goal_date].filter(Boolean).join(" ") || undefined,
+    sport_focus: profileTyped?.sport_focus,
+    experience_years: profileTyped?.experience_years,
+    weekly_hours: profileTyped?.weekly_hours_available,
+    competition_level: profileTyped?.competition_level,
+    has_coach: profileTyped?.has_coach,
+    work_type: profileTyped?.work_type,
+    sleep_goal_hours: profileTyped?.sleep_goal_hours,
+    injuries: injuriesStr,
+    goal: [profileTyped?.goal_event, profileTyped?.goal_target, profileTyped?.goal_date].filter(Boolean).join(" — ") || undefined,
     recurrent_limiters: recurrentLimiters,
     recent_sessions_summary: recentLines.join("\n") || "Sin historial reciente.",
   };
@@ -295,8 +316,19 @@ function ctxBlock(ctx: ReturnType<typeof buildAthleteContext>): string {
   const lines = [];
   if (ctx.ftp_w)              lines.push(`FTP: ${ctx.ftp_w}W`);
   if (ctx.weight_kg)          lines.push(`Peso: ${ctx.weight_kg} kg`);
+  if (ctx.height_cm)          lines.push(`Altura: ${ctx.height_cm} cm`);
+  if (ctx.age)                lines.push(`Edad: ${ctx.age} años`);
+  if (ctx.sex)                lines.push(`Sexo: ${ctx.sex === "M" ? "Masculino" : "Femenino"}`);
   if (ctx.max_hr)             lines.push(`FC max: ${ctx.max_hr} bpm`);
-  if (ctx.primary_type)       lines.push(`Tipo: ${ctx.primary_type}`);
+  if (ctx.primary_type)       lines.push(`Tipo de atleta: ${ctx.primary_type}`);
+  if (ctx.sport_focus?.length) lines.push(`Deportes: ${ctx.sport_focus.join(", ")}`);
+  if (ctx.experience_years != null) lines.push(`Experiencia: ${ctx.experience_years} años`);
+  if (ctx.weekly_hours != null) lines.push(`Horas entrenamiento/sem: ${ctx.weekly_hours}h`);
+  if (ctx.competition_level)  lines.push(`Nivel: ${ctx.competition_level}`);
+  if (ctx.has_coach != null)  lines.push(`Entrenador: ${ctx.has_coach ? "Sí" : "No"}`);
+  if (ctx.work_type)          lines.push(`Trabajo: ${ctx.work_type}`);
+  if (ctx.sleep_goal_hours)   lines.push(`Meta de sueño: ${ctx.sleep_goal_hours}h`);
+  if (ctx.injuries)           lines.push(ctx.injuries);
   if (ctx.goal)               lines.push(`Objetivo: ${ctx.goal}`);
   if (ctx.recurrent_limiters.length)
     lines.push(`Limitantes recurrentes: ${ctx.recurrent_limiters.join(", ")}`);

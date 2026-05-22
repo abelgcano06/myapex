@@ -20,6 +20,11 @@ interface Profile {
   goal_date?: string;
   experience_years?: number;
   weekly_hours_available?: number;
+  competition_level?: "recreational" | "amateur" | "competitor";
+  has_coach?: boolean;
+  work_type?: "sedentary" | "active" | "mixed";
+  sleep_goal_hours?: number;
+  injuries?: string[];
 }
 
 interface HealthFlag {
@@ -70,6 +75,15 @@ interface Baseline {
   };
   athlete_context_string: string;
 }
+
+const INJURY_OPTIONS = [
+  { value: "knee", label: "Rodilla" },
+  { value: "back", label: "Espalda" },
+  { value: "shoulder", label: "Hombro" },
+  { value: "hip", label: "Cadera" },
+  { value: "ankle", label: "Tobillo" },
+  { value: "neck", label: "Cuello" },
+];
 
 const SPORT_OPTIONS = [
   { value: "cycling", label: "Ciclismo" },
@@ -449,6 +463,105 @@ export default function ProfilePage() {
               )}
             </div>
           )}
+        </div>
+
+        {/* Contexto de vida */}
+        <SectionTitle>Contexto de vida</SectionTitle>
+        <div style={{ background: C.card, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 14, border: `1px solid ${C.border}`, boxShadow: C.shadow }}>
+
+          {/* Nivel de competencia */}
+          <div>
+            <label style={labelStyle}>Nivel de competencia</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {([
+                { value: "recreational", label: "Recreativo" },
+                { value: "amateur", label: "Amateur" },
+                { value: "competitor", label: "Competidor" },
+              ] as const).map(opt => {
+                const active = form.competition_level === opt.value;
+                return (
+                  <button key={opt.value} onClick={() => handleChange("competition_level", opt.value)}
+                    style={{ flex: 1, padding: "9px 4px", borderRadius: 10, fontSize: 12, fontWeight: 600,
+                      background: active ? C.purple : C.bg, color: active ? "#fff" : C.secondary,
+                      border: `1px solid ${active ? C.purple : C.border}`, cursor: "pointer" }}>
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Tipo de trabajo */}
+          <div>
+            <label style={labelStyle}>Tipo de trabajo</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {([
+                { value: "sedentary", label: "Sedentario" },
+                { value: "mixed", label: "Mixto" },
+                { value: "active", label: "Activo" },
+              ] as const).map(opt => {
+                const active = form.work_type === opt.value;
+                return (
+                  <button key={opt.value} onClick={() => handleChange("work_type", opt.value)}
+                    style={{ flex: 1, padding: "9px 4px", borderRadius: 10, fontSize: 12, fontWeight: 600,
+                      background: active ? C.purple : C.bg, color: active ? "#fff" : C.secondary,
+                      border: `1px solid ${active ? C.purple : C.border}`, cursor: "pointer" }}>
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Entrenador y horas de sueño */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div>
+              <label style={labelStyle}>¿Tienes entrenador?</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                {([{ value: true, label: "Sí" }, { value: false, label: "No" }] as const).map(opt => {
+                  const active = form.has_coach === opt.value;
+                  return (
+                    <button key={String(opt.value)} onClick={() => handleChange("has_coach", opt.value)}
+                      style={{ flex: 1, padding: "10px 4px", borderRadius: 10, fontSize: 12, fontWeight: 600,
+                        background: active ? C.purple : C.bg, color: active ? "#fff" : C.secondary,
+                        border: `1px solid ${active ? C.purple : C.border}`, cursor: "pointer" }}>
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>Meta de sueño (h)</label>
+              <input type="number" value={form.sleep_goal_hours ?? ""} min={5} max={10} step={0.5}
+                onChange={(e) => handleChange("sleep_goal_hours", e.target.value ? parseFloat(e.target.value) : undefined)}
+                placeholder="8" style={inputStyle} />
+            </div>
+          </div>
+
+          {/* Lesiones recurrentes */}
+          <div>
+            <label style={labelStyle}>Lesiones recurrentes (selecciona las que apliquen)</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {INJURY_OPTIONS.map(opt => {
+                const selected = (form.injuries ?? []).includes(opt.value);
+                return (
+                  <button key={opt.value}
+                    onClick={() => {
+                      const cur = form.injuries ?? [];
+                      handleChange("injuries", selected ? cur.filter(i => i !== opt.value) : [...cur, opt.value]);
+                    }}
+                    style={{ padding: "7px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+                      background: selected ? C.redBg : C.bg,
+                      color: selected ? C.red : C.secondary,
+                      border: `1px solid ${selected ? C.red + "44" : C.border}`, cursor: "pointer" }}>
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
         </div>
 
         {/* Baseline fisiológico */}
