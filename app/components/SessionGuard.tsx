@@ -14,8 +14,13 @@ export function SessionGuard({ children }: SessionGuardProps) {
   useEffect(() => {
     const session = localStorage.getItem("apex_session");
     if (!session) {
-      router.replace("/login");
+      router.replace("/welcome");
     } else {
+      try {
+        const s = JSON.parse(session);
+        if (!s?.email) { router.replace("/welcome"); return; }
+        if (s.onboarding_completed === false) { router.replace("/onboarding/garmin"); return; }
+      } catch { router.replace("/welcome"); return; }
       setChecked(true);
     }
   }, [router]);
