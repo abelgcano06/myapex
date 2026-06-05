@@ -3,27 +3,9 @@ import { NextRequest } from "next/server";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { dbFindByEmail } from "@/lib/accounts-db";
 
 const GARMIN_DIR = process.env.GARMIN_DIR ?? "c:/garmin-ai";
-const ACCOUNTS_FILE = path.join(GARMIN_DIR, "data", "accounts.json");
-
-interface Account {
-  user_id: string; email: string; name: string;
-  password_hash: string; password_salt: string;
-  garmin_email?: string; garmin_password?: string;
-  onboarding_completed: boolean; created_at: string;
-}
-
-interface AccountsStore { users: Account[]; }
-
-function readAccounts(): AccountsStore {
-  try {
-    if (fs.existsSync(ACCOUNTS_FILE)) {
-      return JSON.parse(fs.readFileSync(ACCOUNTS_FILE, "utf-8")) as AccountsStore;
-    }
-  } catch { /* ignore */ }
-  return { users: [] };
-}
 
 function hashPassword(password: string, salt: string): string {
   return crypto.pbkdf2Sync(password, salt, 100000, 64, "sha512").toString("hex");
@@ -64,40 +46,29 @@ export async function POST(request: NextRequest) {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const store = readAccounts();
-  const account = store.users.find(u => u.email === normalizedEmail);
+  const account = await dbFindByEmail(normalizedEmail);
 
-  if (account) {
-    const hash = hashPassword(password, account.password_salt);
-    if (hash !== account.password_hash) {
-      return NextResponse.json({ ok: false, error: "Email o contraseña incorrectos." }, { status: 401 });
-    }
-
-    const response = NextResponse.json({
-      ok: true,
-      user_id: account.user_id,
-      email: account.email,
-      name: account.name,
-      onboarding_completed: account.onboarding_completed,
-    });
-
-    if (account.garmin_email && account.garmin_password) {
-      writeUserSession(account.garmin_email, account.garmin_password);
-      setCookies(response, account.garmin_email);
-    }
-
-    return response;
+  if (!account) {
+    return NextResponse.json({ ok: false, error: "Email o contraseña incorrectos." }, { status: 401 });
   }
 
-  // Legacy fallback: treat email/password as Garmin credentials
-  writeUserSession(normalizedEmail, password);
+  const hash = crypto.pbkdf2Sync(password, account.password_salt, 100000, 64, "sha512").toString("hex");
+  if (hash !== account.password_hash) {
+    return NextResponse.json({ ok: false, error: "Email o contraseña incorrectos." }, { status: 401 });
+  }
+
   const response = NextResponse.json({
     ok: true,
-    user_id: makeUserId(normalizedEmail),
-    email: normalizedEmail,
-    name: "",
-    onboarding_completed: true,
+    user_id: account.user_id,
+    email: account.email,
+    name: account.name,
+    onboarding_completed: account.onboarding_completed,
   });
-  setCookies(response, normalizedEmail);
+
+  if (account.garmin_email && account.garmin_password) {
+    writeUserSession(account.garmin_email, account.garmin_password);
+    setCookies(response, account.garmin_email);
+  }
+
   return response;
 }
