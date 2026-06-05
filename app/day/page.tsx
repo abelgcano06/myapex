@@ -108,12 +108,12 @@ function DataSection({ label, children }: { label: string; children: React.React
 // ── TSB Chip ───────────────────────────────────────────────────────────────
 function TSBChip({ tsb, label }: { tsb?: number; label?: string }) {
   let text = label ?? (tsb == null ? "—" : tsb > 5 ? "Fresco" : tsb >= -10 ? "Neutro" : "Fatigado");
-  let bg   = C.card;
-  let col  = C.muted;
+  let bg: string   = C.card;
+  let col: string  = C.muted;
   if (tsb != null) {
-    if (tsb > 5)    { bg = `${C.green}22`;  col = C.green; }
-    else if (tsb >= -10) { bg = `${C.amber}22`; col = C.amber; }
-    else            { bg = `${C.red}22`;    col = C.red; }
+    if (tsb > 5)         { bg = `${C.green}22`;  col = C.green; }
+    else if (tsb >= -10) { bg = `${C.amber}22`;  col = C.amber; }
+    else                 { bg = `${C.red}22`;    col = C.red; }
   }
   return (
     <span style={{ background: bg, color: col, borderRadius: 20, padding: "4px 12px", fontSize: 12, fontWeight: 700, border: `1px solid ${col}44` }}>
