@@ -3,32 +3,32 @@
 import { useState, useEffect } from "react";
 import { DeepAnalysisModal } from "../components/DeepAnalysisModal";
 import { ApexChat } from "../components/ApexChat";
-import { ScoreRing } from "../components/ScoreRing";
-import { C, triColor } from "@/app/lib/apex-tokens";
+import { C } from "@/app/lib/apex-tokens";
 import {
-  ApexStyles, Card, ApexBadge, MetricCard, SectionHead,
-  AiLoadingCard, ShimmerSkeleton, PageNav, CorrelationsCard,
+  ApexStyles, Card, ApexBadge, SectionHead,
+  AiLoadingCard, ShimmerSkeleton, PageNav,
 } from "@/app/components/ApexUI";
 
 // ── Types ──────────────────────────────────────────────────────────────────
-interface AiSystem { name: string; score: number; status: string; message: string; }
-interface AiCorrelation { systems: string[]; root_cause: string; insight: string; severity: "high" | "medium"; }
-
 interface DayBriefAI {
-  hero?:          { score: number; status: string; headline: string };
-  systems?:       AiSystem[];
-  today?:         { performance: string; action: string };
-  pattern?:       { message: string };
-  correlations?:  AiCorrelation[];
-  deep_analysis?: Record<string, unknown>;
+  hero?:         { score: number; status: string; headline: string };
+  systems?:      { name: string; score: number; status: string; message: string }[];
+  today?:        { performance: string; action: string };
+  pattern?:      { message: string };
+  correlations?: { systems: string[]; root_cause: string; insight: string; severity: string }[];
 }
+
+interface TrainingLoad { atl?: number; ctl?: number; tsb?: number; tsb_label?: string }
 
 interface DayAnalysis {
   recovery_summary: {
     overall_day_state_score: number;
     system_strain_score?:    number;
     day_capacity_score?:     number;
+    nervous_system_load_score?: number;
+    energy_dynamics_score?:  number;
     primary_limiter?:        string;
+    secondary_limiter?:      string;
   };
   energy_dynamics: {
     body_battery_start:    number;
@@ -37,12 +37,19 @@ interface DayAnalysis {
     body_battery_min:      number;
     body_battery_max:      number;
     energy_dynamics_score: number;
+    recharge_events?:      number;
+    crash_events?:         number;
+    body_battery_slope?:   number;
   };
   nervous_system_load: {
     avg_stress:                number;
+    max_stress?:               number;
     avg_hr:                    number;
     resting_hr?:               number;
+    avg_hrv?:                  number;
     nervous_system_load_score: number;
+    stress_spike_count?:       number;
+    high_stress_ratio?:        number;
   };
   physical_load: {
     steps:               number;
@@ -50,20 +57,21 @@ interface DayAnalysis {
     active_calories?:    number;
     physical_load_score: number;
   };
-  recovery_response:  { recovery_response_score: number };
-  cognitive_load:     { cognitive_load_score: number; sedentary_ratio?: number };
-  respiratory?:       { avg_respiration?: number; respiratory_score?: number };
+  recovery_response: {
+    recovery_response_score: number;
+    downshift_count?:        number;
+    downshift_ratio?:        number;
+    max_relief?:             number;
+  };
+  cognitive_load?:   { cognitive_load_score: number; sedentary_ratio?: number };
+  respiratory?:      { avg_respiration?: number; respiratory_score?: number };
+  training_load?:    TrainingLoad;
 }
 
-interface DayHistoryRow { calendar_date: string; overall_day_state_score: number; }
+interface DayPageData { date: string; analysis: DayAnalysis | null; brief_ai: DayBriefAI | null; }
+interface DayHistoryRow { calendar_date: string; overall_day_state_score: number; tsb?: number; }
 
-interface DayPageData {
-  date:     string;
-  analysis: DayAnalysis | null;
-  brief_ai: DayBriefAI | null;
-}
-
-// ── Formatters ─────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 function fmtDatePill(d: string) {
   try {
     const dt = new Date(d + "T00:00:00");
@@ -72,21 +80,20 @@ function fmtDatePill(d: string) {
   } catch { return d.slice(5); }
 }
 
-function sysColor(score: number) {
-  if (score >= 7) return C.green;
-  if (score >= 5) return C.amber;
-  return C.red;
+function clr(val: number, good: number, bad: number, higherIsBetter = true) {
+  if (higherIsBetter) return val >= good ? C.green : val >= bad ? C.amber : C.red;
+  return val <= good ? C.green : val <= bad ? C.amber : C.red;
 }
 
-// ── Raw data ───────────────────────────────────────────────────────────────
-function DataRow({ l, v }: { l: string; v: string }) {
+function DataRow({ l, v, highlight }: { l: string; v: string; highlight?: boolean }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: `1px solid ${C.border}` }}>
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
       <span style={{ fontSize: 13, color: C.secondary }}>{l}</span>
-      <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{v}</span>
+      <span style={{ fontSize: 13, fontWeight: highlight ? 700 : 600, color: highlight ? C.purple : C.text }}>{v}</span>
     </div>
   );
 }
+
 function DataSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 20 }}>
@@ -97,63 +104,95 @@ function DataSection({ label, children }: { label: string; children: React.React
     </div>
   );
 }
-function RawData({ a }: { a: DayAnalysis }) {
-  const ed  = a.energy_dynamics;
-  const nsl = a.nervous_system_load;
-  const pl  = a.physical_load;
+
+// ── TSB Chip ───────────────────────────────────────────────────────────────
+function TSBChip({ tsb, label }: { tsb?: number; label?: string }) {
+  let text = label ?? (tsb == null ? "—" : tsb > 5 ? "Fresco" : tsb >= -10 ? "Neutro" : "Fatigado");
+  let bg   = C.card;
+  let col  = C.muted;
+  if (tsb != null) {
+    if (tsb > 5)    { bg = `${C.green}22`;  col = C.green; }
+    else if (tsb >= -10) { bg = `${C.amber}22`; col = C.amber; }
+    else            { bg = `${C.red}22`;    col = C.red; }
+  }
   return (
-    <div>
-      <DataSection label="Score general">
-        <DataRow l="Score día" v={`${Math.round(a.recovery_summary.overall_day_state_score)}/100`} />
-        {a.recovery_summary.day_capacity_score != null && <DataRow l="Capacidad del día" v={`${Math.round(a.recovery_summary.day_capacity_score)}/100`} />}
-        {a.recovery_summary.system_strain_score != null && <DataRow l="Tensión del sistema" v={`${Math.round(a.recovery_summary.system_strain_score)}/100`} />}
-        {a.recovery_summary.primary_limiter && <DataRow l="Limitante principal" v={a.recovery_summary.primary_limiter} />}
-      </DataSection>
-      <DataSection label="Body Battery">
-        <DataRow l="Inicio" v={`${ed.body_battery_start}`} />
-        <DataRow l="Mínimo" v={`${ed.body_battery_min}`} />
-        <DataRow l="Máximo" v={`${ed.body_battery_max}`} />
-        <DataRow l="Final"  v={`${ed.body_battery_end}`} />
-        <DataRow l="Cambio" v={`${ed.body_battery_change >= 0 ? "+" : ""}${Math.round(ed.body_battery_change)} pts`} />
-      </DataSection>
-      <DataSection label="Sistema nervioso y estrés">
-        <DataRow l="Estrés promedio"  v={`${Math.round(nsl.avg_stress)}`} />
-        <DataRow l="FC promedio"      v={`${Math.round(nsl.avg_hr)} bpm`} />
-        {nsl.resting_hr != null && <DataRow l="FC en reposo" v={`${Math.round(nsl.resting_hr)} bpm`} />}
-        <DataRow l="Score SNA (Apex)" v={`${Math.round(nsl.nervous_system_load_score)}/100`} />
-      </DataSection>
-      <DataSection label="Carga física">
-        <DataRow l="Pasos"              v={pl.steps.toLocaleString()} />
-        <DataRow l="Minutos intensidad" v={`${Math.round(pl.intensity_minutes)} min`} />
-        {pl.active_calories != null && <DataRow l="Calorías activas" v={`${Math.round(pl.active_calories)} kcal`} />}
-        <DataRow l="Score carga física" v={`${Math.round(pl.physical_load_score)}/100`} />
-      </DataSection>
-      <DataSection label="Otros scores Apex">
-        <DataRow l="Recuperación" v={`${Math.round(a.recovery_response.recovery_response_score)}/100`} />
-        <DataRow l="Carga mental" v={`${Math.round(a.cognitive_load.cognitive_load_score)}/100`} />
-        <DataRow l="Energía"      v={`${Math.round(ed.energy_dynamics_score)}/100`} />
-        {a.respiratory?.respiratory_score != null && <DataRow l="Respiración" v={`${Math.round(a.respiratory.respiratory_score)}/100`} />}
-      </DataSection>
+    <span style={{ background: bg, color: col, borderRadius: 20, padding: "4px 12px", fontSize: 12, fontWeight: 700, border: `1px solid ${col}44` }}>
+      {text}
+    </span>
+  );
+}
+
+// ── BB Arc (visual del día) ────────────────────────────────────────────────
+function BBDayArc({ start, end, min, max }: { start: number; end: number; min: number; max: number }) {
+  const scale = (v: number) => `${Math.min(Math.max(v, 0), 100)}%`;
+  const delta = end - start;
+  const deltaColor = delta >= 0 ? C.green : C.red;
+  return (
+    <div style={{ position: "relative", height: 56, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+      {/* Track */}
+      <div style={{ height: 10, background: C.border, borderRadius: 6, position: "relative", overflow: "hidden" }}>
+        {/* Range min→max */}
+        <div style={{
+          position: "absolute",
+          left: scale(min), width: `${Math.max(max - min, 2)}%`,
+          height: "100%", background: `${C.purple}33`, borderRadius: 6,
+        }} />
+        {/* Start marker */}
+        <div style={{ position: "absolute", left: `calc(${scale(start)} - 1px)`, width: 3, height: "100%", background: C.purple, opacity: 0.5 }} />
+        {/* End marker */}
+        <div style={{ position: "absolute", left: `calc(${scale(end)} - 2px)`, width: 5, height: "100%", background: C.purple, borderRadius: 3 }} />
+      </div>
+      {/* Labels */}
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 10, color: C.muted }}>Despertaste</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{start}</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 10, color: C.muted }}>Mín</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.red }}>{min}</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 10, color: C.muted }}>Ahora</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.purple }}>{end}</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: deltaColor }}>{delta >= 0 ? "+" : ""}{Math.round(delta)}</div>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── Main page ──────────────────────────────────────────────────────────────
+// ── Mini score bar ─────────────────────────────────────────────────────────
+function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: C.secondary }}>{label}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color }}>{Math.round(value)}/100</span>
+      </div>
+      <div style={{ height: 5, background: C.border, borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ width: `${value}%`, height: "100%", background: color, borderRadius: 3, transition: "width 0.6s ease" }} />
+      </div>
+    </div>
+  );
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────
 export default function DayPage() {
   const today = new Date().toISOString().split("T")[0];
-  const [selectedDate, setSelectedDate]     = useState(today);
-  const [data, setData]                     = useState<DayPageData | null>(null);
-  const [history, setHistory]               = useState<DayHistoryRow[]>([]);
-  const [loading, setLoading]               = useState(true);
-  const [aiLoading, setAiLoading]           = useState(false);
-  const [deepResult, setDeepResult]         = useState<Record<string, unknown> | null>(null);
-  const [deepOpen, setDeepOpen]             = useState(false);
-  const [dataExpanded, setDataExpanded]     = useState(false);
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [data, setData]                 = useState<DayPageData | null>(null);
+  const [history, setHistory]           = useState<DayHistoryRow[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [aiLoading, setAiLoading]       = useState(false);
+  const [deepResult, setDeepResult]     = useState<Record<string, unknown> | null>(null);
+  const [deepOpen, setDeepOpen]         = useState(false);
+  const [dataExpanded, setDataExpanded] = useState(false);
   const [generatingDeep, setGeneratingDeep] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
+  const [chatOpen, setChatOpen]         = useState(false);
 
   useEffect(() => {
-    fetch("/api/history?section=day")
+    fetch("/api/history?section=day&days=60")
       .then(r => r.json())
       .then((rows: DayHistoryRow[]) => {
         setHistory(rows);
@@ -177,9 +216,7 @@ export default function DayPage() {
           setAiLoading(true);
           fetch(`/api/ai/day-brief?date=${selectedDate}`)
             .then(r => r.json())
-            .then(b => {
-              if (b.ok && b.brief) setData(prev => prev ? { ...prev, brief_ai: b.brief as DayBriefAI } : prev);
-            })
+            .then(b => { if (b.ok && b.brief) setData(prev => prev ? { ...prev, brief_ai: b.brief as DayBriefAI } : prev); })
             .catch(() => {})
             .finally(() => setAiLoading(false));
         }
@@ -203,108 +240,221 @@ export default function DayPage() {
     finally { setGeneratingDeep(false); }
   }
 
-  const a      = data?.analysis ?? null;
-  const ai     = data?.brief_ai ?? null;
-  const score  = a?.recovery_summary.overall_day_state_score ?? null;
-  const ed     = a?.energy_dynamics;
-  const nsl    = a?.nervous_system_load;
-  const pl     = a?.physical_load;
-  const hasData = a != null;
-  const dates   = history.map(r => r.calendar_date);
-  const veredicto = ai?.hero?.status
-    ?? (score != null ? (score >= 70 ? "Día sólido" : score >= 50 ? "Día exigente" : "Capacidad limitada") : "—");
+  const a   = data?.analysis ?? null;
+  const ai  = data?.brief_ai ?? null;
+  const ed  = a?.energy_dynamics;
+  const nsl = a?.nervous_system_load;
+  const pl  = a?.physical_load;
+  const rr  = a?.recovery_response;
+  const tl  = a?.training_load;
+  const tsb = tl?.tsb;
 
-  const bbSt     = ed  ? triColor(ed.body_battery_change, 10, -10) : null;
-  const stressSt = nsl ? triColor(nsl.avg_stress, 25, 40, false) : null;
-  const stepsSt  = pl  ? triColor(pl.steps, 8000, 4000) : null;
-  const intensSt = pl  ? triColor(pl.intensity_minutes, 30, 10) : null;
+  // Decisión de entrenamiento basada en TSB + nervous load + BB
+  function getTrainingRec() {
+    if (!a) return null;
+    const nslScore = nsl?.nervous_system_load_score ?? 50;
+    const bbEnd    = ed?.body_battery_end ?? 50;
+    if (tsb != null && tsb > 10 && nslScore >= 60 && bbEnd >= 50)
+      return { text: "Condiciones óptimas para entrenar con carga alta.", color: C.green };
+    if (tsb != null && tsb < -20 || nslScore < 35 || (bbEnd != null && bbEnd < 25))
+      return { text: "Sistema bajo carga alta. Solo recuperación activa o descanso.", color: C.red };
+    return { text: "Puedes entrenar con carga moderada. Escucha cómo responde el cuerpo.", color: C.amber };
+  }
+  const rec = getTrainingRec();
+
+  const tsbLabel = tl?.tsb_label ?? (tsb == null ? "—" : tsb > 5 ? "Fresco" : tsb >= -10 ? "Neutro" : "Fatigado");
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, paddingBottom: 80 }}>
       <ApexStyles />
-
       <PageNav title="Día" />
 
       <div style={{ maxWidth: 480, margin: "0 auto", padding: "0 16px" }}>
 
         {/* DATE PILLS */}
-        {dates.length > 0 && (
+        {history.length > 0 && (
           <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 16, scrollbarWidth: "none" }}>
-            {[...dates].reverse().map(date => {
-              const active = date === selectedDate;
+            {[...history].reverse().map(h => {
+              const active = h.calendar_date === selectedDate;
               return (
-                <button key={date} onClick={() => setSelectedDate(date)} style={{
+                <button key={h.calendar_date} onClick={() => setSelectedDate(h.calendar_date)} style={{
                   flexShrink: 0, borderRadius: 99, padding: "5px 12px",
                   background: active ? C.purple : C.card,
                   color: active ? "#fff" : C.muted,
                   border: `1px solid ${active ? C.purple : C.border}`,
                   fontSize: 11, fontWeight: active ? 700 : 500, cursor: "pointer", whiteSpace: "nowrap",
                 }}>
-                  {fmtDatePill(date)}
+                  {fmtDatePill(h.calendar_date)}
                 </button>
               );
             })}
           </div>
         )}
 
-        {loading && <ShimmerSkeleton heights={[120, 80, 180, 140, 100]} />}
-
-        {!loading && !hasData && (
-          <Card>
-            <p style={{ color: C.muted, textAlign: "center", fontSize: 14, margin: 0 }}>Sin datos para este día.</p>
-          </Card>
+        {loading && <ShimmerSkeleton heights={[100, 80, 120, 80, 100, 80]} />}
+        {!loading && !a && (
+          <Card><p style={{ color: C.muted, textAlign: "center", fontSize: 14, margin: 0 }}>Sin datos para este día.</p></Card>
         )}
 
-        {!loading && hasData && a && (
+        {!loading && a && (
           <>
-            {/* ── 1. HERO ── */}
+            {/* ── 1. ASÍ DESPERTASTE ── */}
             <Card style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-                <ScoreRing score={score} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: C.text, lineHeight: 1.25, marginBottom: 6 }}>
-                    {veredicto}
+              <SectionHead>Así despertaste</SectionHead>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                {ed && (
+                  <div style={{ textAlign: "center", background: C.bg, borderRadius: 10, padding: "10px 6px" }}>
+                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>Body Battery</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: C.text }}>{ed.body_battery_start}</div>
+                    <div style={{ fontSize: 10, color: C.secondary }}>al despertar</div>
                   </div>
-                  {ai?.hero?.headline && (
-                    <p style={{ fontSize: 12, color: C.secondary, lineHeight: 1.5, margin: "0 0 10px" }}>
-                      {ai.hero.headline}
-                    </p>
-                  )}
-                  {a.recovery_summary.primary_limiter && (
-                    <span style={{ display: "inline-block", fontSize: 11, fontWeight: 600, background: C.amberBg, color: C.amber, padding: "3px 8px", borderRadius: 20 }}>
-                      Limitante: {a.recovery_summary.primary_limiter.replace(/_/g, " ")}
-                    </span>
-                  )}
-                </div>
+                )}
+                {nsl?.resting_hr && (
+                  <div style={{ textAlign: "center", background: C.bg, borderRadius: 10, padding: "10px 6px" }}>
+                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>FC Reposo</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: C.text }}>{Math.round(nsl.resting_hr)}</div>
+                    <div style={{ fontSize: 10, color: C.secondary }}>bpm</div>
+                  </div>
+                )}
+                {a.respiratory?.avg_respiration && (
+                  <div style={{ textAlign: "center", background: C.bg, borderRadius: 10, padding: "10px 6px" }}>
+                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>Respiración</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: C.text }}>{a.respiratory.avg_respiration.toFixed(1)}</div>
+                    <div style={{ fontSize: 10, color: C.secondary }}>rpm</div>
+                  </div>
+                )}
               </div>
             </Card>
 
-            {/* ── 2. MÉTRICAS ── */}
-            {ed && nsl && pl && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
-                <MetricCard color={bbSt!.color} bg={bbSt!.bg} label="BODY BATTERY"
-                  value={`${ed.body_battery_change >= 0 ? "+" : ""}${Math.round(ed.body_battery_change)}`}
-                  sub={`${ed.body_battery_start} → ${ed.body_battery_end}`} />
-                <MetricCard color={stressSt!.color} bg={stressSt!.bg} label="ESTRÉS PROM."
-                  value={`${Math.round(nsl.avg_stress)}`}
-                  sub={`FC prom. ${Math.round(nsl.avg_hr)} bpm`} />
-                <MetricCard color={stepsSt!.color} bg={stepsSt!.bg} label="PASOS"
-                  value={`${(pl.steps / 1000).toFixed(1)}k`}
-                  sub={pl.active_calories != null ? `${Math.round(pl.active_calories)} kcal` : "pasos hoy"} />
-                <MetricCard color={intensSt!.color} bg={intensSt!.bg} label="INTENSIDAD"
-                  value={`${Math.round(pl.intensity_minutes)} min`}
-                  sub="minutos activos" />
+            {/* ── 2. FORMA DEL DÍA (TSB) ── */}
+            <Card style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <SectionHead style={{ margin: 0 }}>Forma del día</SectionHead>
+                <TSBChip tsb={tsb} label={tsbLabel} />
               </div>
+              {tl && (tl.ctl != null || tl.atl != null) && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                  {([
+                    { label: "CTL (forma)", val: tl.ctl, good: 40, bad: 20 },
+                    { label: "ATL (fatiga)", val: tl.atl, good: 20, bad: 40, inv: true },
+                    { label: "TSB (balance)", val: tl.tsb, good: 5, bad: -15 },
+                  ] as const).map(m => m.val != null && (
+                    <div key={m.label} style={{ textAlign: "center", background: C.bg, borderRadius: 10, padding: "8px 4px" }}>
+                      <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>{m.label}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{m.val.toFixed(0)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!tl?.ctl && !tl?.atl && (
+                <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>Necesitas más actividades con potenciómetro para calcular tu carga de entrenamiento.</p>
+              )}
+            </Card>
+
+            {/* ── 3. SISTEMA NERVIOSO ── */}
+            {nsl && (
+              <Card style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                  <SectionHead style={{ margin: 0 }}>Sistema nervioso</SectionHead>
+                  <span style={{
+                    fontSize: 12, fontWeight: 700,
+                    color: clr(nsl.nervous_system_load_score, 65, 40),
+                    background: `${clr(nsl.nervous_system_load_score, 65, 40)}22`,
+                    padding: "3px 10px", borderRadius: 20,
+                  }}>
+                    {nsl.nervous_system_load_score >= 65 ? "Recuperado" : nsl.nervous_system_load_score >= 40 ? "Moderado" : "Cargado"}
+                  </span>
+                </div>
+                <ScoreBar label="Carga del SNA" value={nsl.nervous_system_load_score} color={clr(nsl.nervous_system_load_score, 65, 40)} />
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
+                  <div style={{ textAlign: "center" }}>
+                    <div style={{ fontSize: 10, color: C.muted }}>Estrés prom.</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: clr(nsl.avg_stress, 25, 40, false) }}>{Math.round(nsl.avg_stress)}</div>
+                  </div>
+                  <div style={{ textAlign: "center" }}>
+                    <div style={{ fontSize: 10, color: C.muted }}>FC promedio</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{Math.round(nsl.avg_hr)} bpm</div>
+                  </div>
+                  {nsl.stress_spike_count != null && (
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: C.muted }}>Picos estrés</div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: nsl.stress_spike_count > 5 ? C.red : C.text }}>{nsl.stress_spike_count}</div>
+                    </div>
+                  )}
+                </div>
+              </Card>
             )}
 
-            {/* ── 3. AI LOADING / RECOMENDACIÓN ── */}
-            {aiLoading && !ai && <AiLoadingCard />}
+            {/* ── 4. CURVA DEL DÍA (Body Battery arc) ── */}
+            {ed && (
+              <Card style={{ marginBottom: 12 }}>
+                <SectionHead>Curva del día — Body Battery</SectionHead>
+                <BBDayArc start={ed.body_battery_start} end={ed.body_battery_end} min={ed.body_battery_min} max={ed.body_battery_max} />
+                {(ed.recharge_events != null || ed.crash_events != null) && (
+                  <div style={{ display: "flex", gap: 16, marginTop: 12, justifyContent: "center" }}>
+                    {ed.recharge_events != null && (
+                      <span style={{ fontSize: 12, color: C.green }}>↑ {ed.recharge_events} recarga{ed.recharge_events !== 1 ? "s" : ""}</span>
+                    )}
+                    {ed.crash_events != null && ed.crash_events > 0 && (
+                      <span style={{ fontSize: 12, color: C.red }}>↓ {ed.crash_events} caída{ed.crash_events !== 1 ? "s" : ""}</span>
+                    )}
+                  </div>
+                )}
+              </Card>
+            )}
 
+            {/* ── 5. CÓMO VAS AHORITA ── */}
+            <Card style={{ marginBottom: 12 }}>
+              <SectionHead>Cómo vas ahorita</SectionHead>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                {pl && (
+                  <>
+                    <div style={{ background: C.bg, borderRadius: 10, padding: "10px 12px" }}>
+                      <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>Pasos</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: clr(pl.steps, 8000, 4000) }}>{(pl.steps / 1000).toFixed(1)}k</div>
+                      {pl.active_calories != null && <div style={{ fontSize: 10, color: C.secondary }}>{Math.round(pl.active_calories)} kcal activas</div>}
+                    </div>
+                    <div style={{ background: C.bg, borderRadius: 10, padding: "10px 12px" }}>
+                      <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>Intensidad</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: clr(pl.intensity_minutes, 30, 10) }}>{Math.round(pl.intensity_minutes)} min</div>
+                      <div style={{ fontSize: 10, color: C.secondary }}>minutos activos</div>
+                    </div>
+                  </>
+                )}
+              </div>
+              {rr && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderTop: `1px solid ${C.border}` }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: C.secondary }}>Eventos de recuperación</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>Veces que el cuerpo bajó de estrés alto</div>
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: rr.downshift_count && rr.downshift_count >= 3 ? C.green : C.amber }}>
+                    {rr.downshift_count ?? 0}
+                  </div>
+                </div>
+              )}
+            </Card>
+
+            {/* ── 6. RECOMENDACIÓN ── */}
+            {rec && (
+              <Card style={{ marginBottom: 12, borderLeft: `3px solid ${rec.color}` }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: rec.color, marginTop: 5, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.secondary, marginBottom: 4 }}>Recomendación del día</div>
+                    <p style={{ fontSize: 14, color: C.text, margin: 0, lineHeight: 1.5 }}>{rec.text}</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* ── 7. IA ── */}
+            {aiLoading && !ai && <AiLoadingCard />}
             {ai?.today?.action && (
               <Card style={{ marginBottom: 12, background: C.purpleLight, border: `1px solid ${C.purple}22` }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                   <ApexBadge />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: C.purple }}>Recomendación de hoy</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: C.purple }}>Apex IA</span>
                 </div>
                 <p style={{ fontSize: 14, color: C.text, lineHeight: 1.6, margin: "0 0 6px" }}>{ai.today.action}</p>
                 {ai.today.performance && (
@@ -313,84 +463,7 @@ export default function DayPage() {
               </Card>
             )}
 
-            {/* ── 4. POR QUÉ ── */}
-            {ai?.systems && ai.systems.length > 0 && (
-              <Card style={{ marginBottom: 12 }}>
-                <SectionHead>Por qué</SectionHead>
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {ai.systems.map(sys => {
-                    const pct   = (sys.score / 10) * 100;
-                    const color = sysColor(sys.score);
-                    return (
-                      <div key={sys.name}>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                          <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{sys.name}</span>
-                          <span style={{ fontSize: 13, fontWeight: 700, color }}>{sys.score.toFixed(1)}/10</span>
-                        </div>
-                        <div style={{ background: C.border, borderRadius: 4, height: 6, overflow: "hidden" }}>
-                          <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 4, transition: "width 0.6s ease" }} />
-                        </div>
-                        {(sys.status === "down" || sys.status === "warning") && sys.message && (
-                          <p style={{ fontSize: 11, color: C.secondary, margin: "4px 0 0", lineHeight: 1.4 }}>{sys.message}</p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-            )}
-
-            {/* ── 5. SEÑALES CONECTADAS ── */}
-            {ai?.correlations && ai.correlations.length > 0 && (
-              <CorrelationsCard correlations={ai.correlations} />
-            )}
-
-            {/* ── 6. BODY BATTERY RANGO ── */}
-            {ed && (
-              <Card style={{ marginBottom: 12 }}>
-                <SectionHead>Body Battery</SectionHead>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 14 }}>
-                  {([
-                    { label: "Inicio", val: ed.body_battery_start },
-                    { label: "Mínimo", val: ed.body_battery_min },
-                    { label: "Máximo", val: ed.body_battery_max },
-                    { label: "Final",  val: ed.body_battery_end },
-                  ] as const).map(m => (
-                    <div key={m.label} style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: 10, color: C.muted, marginBottom: 2, textTransform: "uppercase" }}>{m.label}</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: C.text }}>{m.val}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ flex: 1, height: 8, background: C.border, borderRadius: 4, overflow: "hidden", position: "relative" }}>
-                    <div style={{
-                      position: "absolute",
-                      left: `${ed.body_battery_min}%`,
-                      width: `${Math.max(ed.body_battery_max - ed.body_battery_min, 2)}%`,
-                      height: "100%", background: C.purpleLight, borderRadius: 4,
-                    }} />
-                    <div style={{ position: "absolute", left: `${Math.min(ed.body_battery_end, 97)}%`, width: 3, height: "100%", background: C.purple }} />
-                  </div>
-                  <span style={{ fontSize: 12, fontWeight: 800, flexShrink: 0, color: ed.body_battery_change >= 0 ? C.green : C.red }}>
-                    {ed.body_battery_change >= 0 ? "+" : ""}{Math.round(ed.body_battery_change)} pts
-                  </span>
-                </div>
-              </Card>
-            )}
-
-            {/* ── 7. PATRÓN PERSONAL ── */}
-            {ai?.pattern?.message && (
-              <Card style={{ marginBottom: 12, background: C.purpleLight, border: `1px solid ${C.purple}22` }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                  <ApexBadge />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: C.purple }}>Patrón personal</span>
-                </div>
-                <p style={{ fontSize: 13, color: C.text, lineHeight: 1.6, margin: 0 }}>{ai.pattern.message}</p>
-              </Card>
-            )}
-
-            {/* ── 8. HISTORY BARS ── */}
+            {/* ── 8. HISTORIAL ── */}
             {history.length > 1 && (
               <Card style={{ marginBottom: 12 }}>
                 <SectionHead>Últimos {Math.min(history.length, 20)} días</SectionHead>
@@ -413,39 +486,23 @@ export default function DayPage() {
 
             {/* ── 9. BOTONES ── */}
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-              <button
-                onClick={() => setChatOpen(true)}
-                style={{
-                  width: "100%", padding: 14,
-                  background: C.purple, color: "#fff",
-                  border: "none", borderRadius: 12,
-                  fontSize: 15, fontWeight: 600, cursor: "pointer",
-                }}
-              >
+              <button onClick={() => setChatOpen(true)} style={{
+                width: "100%", padding: 14, background: C.purple, color: "#fff",
+                border: "none", borderRadius: 12, fontSize: 15, fontWeight: 600, cursor: "pointer",
+              }}>
                 💬 Hablar con IA
               </button>
-              <button
-                onClick={handleDeepAnalysis}
-                disabled={generatingDeep}
-                style={{
-                  width: "100%", padding: 12,
-                  background: C.purpleLight, color: C.purpleText,
-                  border: "none", borderRadius: 12,
-                  fontSize: 14, fontWeight: 600, cursor: generatingDeep ? "default" : "pointer",
-                  opacity: generatingDeep ? 0.7 : 1,
-                }}
-              >
+              <button onClick={handleDeepAnalysis} disabled={generatingDeep} style={{
+                width: "100%", padding: 12, background: C.purpleLight, color: C.purple,
+                border: "none", borderRadius: 12, fontSize: 14, fontWeight: 600,
+                cursor: generatingDeep ? "default" : "pointer", opacity: generatingDeep ? 0.7 : 1,
+              }}>
                 {generatingDeep ? "Analizando..." : "Análisis profundo →"}
               </button>
-              <button
-                onClick={() => setDataExpanded(!dataExpanded)}
-                style={{
-                  width: "100%", padding: 12,
-                  background: "transparent", color: C.secondary,
-                  border: `1px solid ${C.border}`, borderRadius: 12,
-                  fontSize: 14, fontWeight: 500, cursor: "pointer",
-                }}
-              >
+              <button onClick={() => setDataExpanded(!dataExpanded)} style={{
+                width: "100%", padding: 12, background: "transparent", color: C.secondary,
+                border: `1px solid ${C.border}`, borderRadius: 12, fontSize: 14, fontWeight: 500, cursor: "pointer",
+              }}>
                 {dataExpanded ? "▲ Ocultar datos" : "▼ Ver toda la data"}
               </button>
             </div>
@@ -453,7 +510,52 @@ export default function DayPage() {
             {/* ── 10. RAW DATA ── */}
             {dataExpanded && (
               <Card style={{ marginBottom: 24 }}>
-                <RawData a={a} />
+                <DataSection label="Garmin — Body Battery">
+                  <DataRow l="Al despertar" v={`${ed?.body_battery_start ?? "—"}`} />
+                  <DataRow l="Mínimo del día" v={`${ed?.body_battery_min ?? "—"}`} />
+                  <DataRow l="Máximo del día" v={`${ed?.body_battery_max ?? "—"}`} />
+                  <DataRow l="Al final del día" v={`${ed?.body_battery_end ?? "—"}`} />
+                  <DataRow l="Cambio neto" v={ed?.body_battery_change != null ? `${ed.body_battery_change >= 0 ? "+" : ""}${Math.round(ed.body_battery_change)} pts` : "—"} />
+                </DataSection>
+
+                <DataSection label="Garmin — Estrés y FC">
+                  <DataRow l="Estrés promedio" v={nsl?.avg_stress != null ? `${Math.round(nsl.avg_stress)}` : "—"} />
+                  <DataRow l="Estrés máximo" v={nsl?.max_stress != null ? `${Math.round(nsl.max_stress)}` : "—"} />
+                  <DataRow l="FC promedio" v={nsl?.avg_hr != null ? `${Math.round(nsl.avg_hr)} bpm` : "—"} />
+                  <DataRow l="FC en reposo" v={nsl?.resting_hr != null ? `${Math.round(nsl.resting_hr)} bpm` : "—"} />
+                  <DataRow l="HRV diurno" v={nsl?.avg_hrv != null ? `${Math.round(nsl.avg_hrv)} ms` : "—"} />
+                  <DataRow l="Picos de estrés" v={nsl?.stress_spike_count != null ? `${nsl.stress_spike_count}` : "—"} />
+                  <DataRow l="Ratio estrés alto" v={nsl?.high_stress_ratio != null ? `${(nsl.high_stress_ratio * 100).toFixed(1)}%` : "—"} />
+                </DataSection>
+
+                <DataSection label="Garmin — Actividad física">
+                  <DataRow l="Pasos" v={pl?.steps != null ? pl.steps.toLocaleString() : "—"} />
+                  <DataRow l="Minutos intensidad" v={pl?.intensity_minutes != null ? `${Math.round(pl.intensity_minutes)} min` : "—"} />
+                  <DataRow l="Calorías activas" v={pl?.active_calories != null ? `${Math.round(pl.active_calories)} kcal` : "—"} />
+                  <DataRow l="Respiración prom." v={a.respiratory?.avg_respiration != null ? `${a.respiratory.avg_respiration.toFixed(1)} rpm` : "—"} />
+                </DataSection>
+
+                <DataSection label="Apex — Carga de entrenamiento">
+                  <DataRow l="CTL (forma crónica)" v={tl?.ctl != null ? `${tl.ctl.toFixed(1)}` : "—"} highlight />
+                  <DataRow l="ATL (fatiga aguda)" v={tl?.atl != null ? `${tl.atl.toFixed(1)}` : "—"} highlight />
+                  <DataRow l="TSB (balance)" v={tl?.tsb != null ? `${tl.tsb.toFixed(1)}` : "—"} highlight />
+                  <DataRow l="Estado de forma" v={tsbLabel} />
+                </DataSection>
+
+                <DataSection label="Apex — Sistema nervioso y recuperación">
+                  <DataRow l="Carga SNA (0-100)" v={nsl?.nervous_system_load_score != null ? `${Math.round(nsl.nervous_system_load_score)}/100` : "—"} highlight />
+                  <DataRow l="Score energía" v={ed?.energy_dynamics_score != null ? `${Math.round(ed.energy_dynamics_score)}/100` : "—"} />
+                  <DataRow l="Score recuperación" v={rr?.recovery_response_score != null ? `${Math.round(rr.recovery_response_score)}/100` : "—"} />
+                  <DataRow l="Downshifts (recuperaciones)" v={rr?.downshift_count != null ? `${rr.downshift_count}` : "—"} highlight />
+                  <DataRow l="Ratio downshift" v={rr?.downshift_ratio != null ? `${(rr.downshift_ratio * 100).toFixed(1)}%` : "—"} />
+                  <DataRow l="Score respiración" v={a.respiratory?.respiratory_score != null ? `${Math.round(a.respiratory.respiratory_score)}/100` : "—"} />
+                  <DataRow l="Carga mental" v={a.cognitive_load?.cognitive_load_score != null ? `${Math.round(a.cognitive_load.cognitive_load_score)}/100` : "—"} />
+                  <DataRow l="Tensión del sistema" v={a.recovery_summary?.system_strain_score != null ? `${Math.round(a.recovery_summary.system_strain_score)}/100` : "—"} />
+                  <DataRow l="Capacidad del día" v={a.recovery_summary?.day_capacity_score != null ? `${Math.round(a.recovery_summary.day_capacity_score)}/100` : "—"} />
+                  <DataRow l="Score día (global)" v={a.recovery_summary?.overall_day_state_score != null ? `${Math.round(a.recovery_summary.overall_day_state_score)}/100` : "—"} />
+                  {a.recovery_summary?.primary_limiter && <DataRow l="Limitante principal" v={a.recovery_summary.primary_limiter.replace(/_/g, " ")} />}
+                  {a.recovery_summary?.secondary_limiter && <DataRow l="Limitante secundario" v={a.recovery_summary.secondary_limiter.replace(/_/g, " ")} />}
+                </DataSection>
               </Card>
             )}
           </>
@@ -466,12 +568,11 @@ export default function DayPage() {
           onClose={() => setDeepOpen(false)}
         />
       )}
-
       {chatOpen && data && (
         <ApexChat
           section="day"
           context={{ date: selectedDate, analysis: data.analysis, brief_ai: data.brief_ai }}
-          subtitle={`${selectedDate} · Score ${Math.round(score ?? 0)}`}
+          subtitle={`${selectedDate}`}
           onClose={() => setChatOpen(false)}
         />
       )}
