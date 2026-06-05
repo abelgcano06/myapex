@@ -72,10 +72,30 @@ export async function GET(request: NextRequest) {
   return NextResponse.json(readStatus(statusFile));
 }
 
+function ensureSessionFile(sessionFile: string, garminEmail: string) {
+  if (fs.existsSync(sessionFile)) return;
+  try {
+    const store = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, "utf-8")) as {
+      users: Array<{ garmin_email?: string; garmin_password?: string }>;
+    };
+    const user = store.users.find(u => u.garmin_email?.toLowerCase() === garminEmail.toLowerCase());
+    if (user?.garmin_email && user?.garmin_password) {
+      fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+      fs.writeFileSync(sessionFile, JSON.stringify({ email: user.garmin_email, password: user.garmin_password }, null, 2), "utf-8");
+    }
+  } catch { /* ignore */ }
+}
+
+const ACCOUNTS_FILE = path.join(DATA_DIR, "accounts.json");
+
 export async function POST(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const sections = searchParams.get("sections") ?? "sleep,day,activities,master,ftp,profile";
-  const { sessionFile, statusFile, logFile } = getSyncPaths(request);
+  const { garminKey, sessionFile, statusFile, logFile } = getSyncPaths(request);
+
+  // Recrear session file si no existe (después de reinicio del servidor)
+  const garminEmail = request.cookies.get("apex_garmin_email")?.value ?? "";
+  if (garminKey && garminEmail) ensureSessionFile(sessionFile, garminEmail);
 
   const current = readStatus(statusFile);
   if (current.status === "running" || current.status === "starting") {
