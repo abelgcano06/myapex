@@ -329,7 +329,7 @@ export default function DayPage() {
             {/* ── 2. FORMA DEL DÍA (TSB) ── */}
             <Card style={{ marginBottom: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                <SectionHead style={{ margin: 0 }}>Forma del día</SectionHead>
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Forma del día</span>
                 <TSBChip tsb={tsb} label={tsbLabel} />
               </div>
               {tl && (tl.ctl != null || tl.atl != null) && (
@@ -355,7 +355,7 @@ export default function DayPage() {
             {nsl && (
               <Card style={{ marginBottom: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                  <SectionHead style={{ margin: 0 }}>Sistema nervioso</SectionHead>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Sistema nervioso</span>
                   <span style={{
                     fontSize: 12, fontWeight: 700,
                     color: clr(nsl.nervous_system_load_score, 65, 40),
