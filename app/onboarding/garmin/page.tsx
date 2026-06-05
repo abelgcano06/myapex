@@ -32,10 +32,11 @@ export default function OnboardingGarminPage() {
     setLoading(true);
     setError("");
     try {
+      const apexSession = JSON.parse(localStorage.getItem("apex_session") ?? "{}");
       const res = await fetch("/api/auth/validate-garmin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ garmin_email: garminEmail.trim(), garmin_password: garminPassword }),
+        body: JSON.stringify({ garmin_email: garminEmail.trim(), garmin_password: garminPassword, apex_email: apexSession.email }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
